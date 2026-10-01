@@ -1,65 +1,106 @@
-//! Validate the workspace-root `README.md` Documentation table cites the
-//! BFLD crate. crates.io won't show this, but new contributors browsing
-//! `ruvnet/RuView` on GitHub will — the entry is the primary discovery
-//! path for operators looking for "WiFi sensing privacy layer".
+//! The research fork's root README documents its own service and links to
+//! upstream RuView in its acknowledgement. Keep that discovery/attribution
+//! contract, while checking BFLD-specific documentation in the crate README
+//! rather than requiring upstream-only features in the research overview.
 
 #![cfg(feature = "std")]
 
 const ROOT_README: &str = include_str!("../../../../README.md");
+const CRATE_README: &str = include_str!("../README.md");
+const ROOT_LICENSE: &str = include_str!("../../../../LICENSE");
 
 #[test]
-fn root_readme_links_to_bfld_crate_readme() {
+fn root_readme_preserves_research_scope_and_upstream_attribution() {
+    let title = ROOT_README
+        .lines()
+        .next()
+        .expect("root README needs a title");
     assert!(
-        ROOT_README.contains("v2/crates/wifi-densepose-bfld/README.md"),
-        "root README must link to the BFLD crate README from the Documentation table",
+        title.starts_with("# ") && title.contains("Wi-Fi CSI") && title.contains("고령자"),
+        "the research project must remain the root README's primary subject",
     );
-}
-
-#[test]
-fn root_readme_mentions_bfld_acronym_and_full_name() {
+    let acknowledgement = ROOT_README
+        .split_once("## Based on RuView / Acknowledgement")
+        .expect("root README must acknowledge that the project is based on RuView")
+        .1
+        .split("\n## ")
+        .next()
+        .unwrap();
     assert!(
-        ROOT_README.contains("BFLD"),
-        "root README must mention the BFLD acronym",
+        acknowledgement.contains("[ruvnet/RuView](https://github.com/ruvnet/RuView)"),
+        "acknowledgement must link to upstream RuView for original functionality and documentation",
     );
-    assert!(
-        ROOT_README.contains("Beamforming Feedback Layer for Detection"),
-        "root README must expand the BFLD acronym at least once",
-    );
-}
-
-#[test]
-fn root_readme_cites_all_six_bfld_adrs() {
-    for adr in ["ADR-118", "ADR-119", "ADR-120", "ADR-121", "ADR-122", "ADR-123"] {
+    for notice in [
+        "MIT License",
+        "Copyright (c) 2024 rUv",
+        "[LICENSE](LICENSE)",
+    ] {
         assert!(
-            ROOT_README.contains(adr),
-            "root README must cite {adr} so the discovery path is intact",
+            acknowledgement.contains(notice),
+            "acknowledgement must preserve {notice}"
+        );
+    }
+    assert!(
+        ROOT_LICENSE.contains("MIT License") && ROOT_LICENSE.contains("Copyright (c) 2024 rUv")
+    );
+    let scope_disclaimer = acknowledgement
+        .split("\n\n")
+        .find(|paragraph| paragraph.contains("본 연구의 기능 또는 검증 결과가 아닙니다"))
+        .expect(
+            "upstream-only features must not be presented as research functionality or results",
+        );
+    for feature in ["DensePose", "vital signs", "fall detection"] {
+        assert!(
+            scope_disclaimer.contains(feature),
+            "scope disclaimer must cover {feature}"
         );
     }
 }
 
 #[test]
-fn root_readme_points_at_research_bundle() {
+fn bfld_crate_readme_mentions_bfld_acronym_and_full_name() {
     assert!(
-        ROOT_README.contains("docs/research/BFLD/"),
-        "root README must point at the BFLD research dossier",
+        CRATE_README.contains("BFLD"),
+        "crate README must mention the BFLD acronym",
+    );
+    assert!(
+        CRATE_README.contains("Beamforming Feedback Layer for Detection"),
+        "crate README must expand the BFLD acronym at least once",
     );
 }
 
 #[test]
-fn root_readme_documents_three_structural_invariants_in_summary() {
-    // The doc-table summary is short, but it should still mention the
-    // three I1/I2/I3 invariants since they're the single most operator-
-    // visible property of BFLD.
+fn bfld_crate_readme_cites_all_six_bfld_adrs() {
+    for adr in [
+        "ADR-118", "ADR-119", "ADR-120", "ADR-121", "ADR-122", "ADR-123",
+    ] {
+        assert!(
+            CRATE_README.contains(adr),
+            "crate README must cite {adr} so the discovery path is intact",
+        );
+    }
+}
+
+#[test]
+fn bfld_crate_readme_points_at_research_bundle() {
     assert!(
-        ROOT_README.contains("raw BFI never exits"),
-        "root README must mention invariant I1 in the BFLD summary",
+        CRATE_README.contains("docs/research/BFLD/"),
+        "crate README must point at the BFLD research dossier",
+    );
+}
+
+#[test]
+fn bfld_crate_readme_documents_three_structural_invariants() {
+    assert!(
+        CRATE_README.contains("Raw BFI never exits"),
+        "crate README must mention invariant I1",
     );
     assert!(
-        ROOT_README.contains("in-RAM-only") || ROOT_README.contains("in-RAM only"),
-        "root README must mention invariant I2 in the BFLD summary",
+        CRATE_README.contains("in-RAM-only") || CRATE_README.contains("in-RAM only"),
+        "crate README must mention invariant I2",
     );
     assert!(
-        ROOT_README.contains("cross-site"),
-        "root README must mention invariant I3 in the BFLD summary",
+        CRATE_README.contains("Cross-site"),
+        "crate README must mention invariant I3",
     );
 }
