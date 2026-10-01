@@ -1,0 +1,35 @@
+[submodule "vendor/midstream"]
+	path = vendor/midstream
+	url = https://github.com/ruvnet/midstream
+	branch = main
+[submodule "vendor/ruvector"]
+	path = vendor/ruvector
+	url = https://github.com/ruvnet/ruvector
+	branch = main
+[submodule "vendor/sublinear-time-solver"]
+	path = vendor/sublinear-time-solver
+	url = https://github.com/ruvnet/sublinear-time-solver
+	branch = main
+[submodule "vendor/rvcsi"]
+	path = vendor/rvcsi
+	url = https://github.com/ruvnet/rvcsi
+	branch = main
+[submodule "v2/crates/ruv-neural"]
+	path = v2/crates/ruv-neural
+	url = https://github.com/ruvnet/ruv-neural.git
+	branch = main
+[submodule "vendor/rufield"]
+	path = vendor/rufield
+	url = https://github.com/ruvnet/rufield
+[submodule "v2/crates/ruview-swarm"]
+	path = v2/crates/ruview-swarm
+	url = https://github.com/ruvnet/ruv-drone.git
+	branch = main
+[submodule "v2/crates/worldgraph"]
+	path = v2/crates/worldgraph
+	url = https://github.com/ruvnet/worldgraph.git
+	branch = main
+[submodule "vendor/metaharness"]
+	path = vendor/metaharness
+	url = https://github.com/ruvnet/metaharness
+	branch = main

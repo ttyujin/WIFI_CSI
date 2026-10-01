@@ -1,0 +1,80 @@
+services:
+  sensing-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.rust
+    image: ruvnet/wifi-densepose:latest
+    # ESP32 CSI must accept LAN UDP; TCP APIs below remain loopback-only.
+    # kics-scan ignore-line
+    ports:
+      - "127.0.0.1:3000:3000"   # REST API
+      - "127.0.0.1:3001:3001"   # WebSocket
+      # ESP32 UDP. On Linux/macOS this works with multiple ESP32 nodes out of
+      # the box. On Docker Desktop for Windows, multi-source UDP is collapsed
+      # to one source IP at the WSL/Hyper-V boundary, so all-but-one node's
+      # frames are silently dropped (issue #374, #386).
+      #
+      # Windows workaround: change this to "5006:5005/udp" and run the host
+      # relay so every datagram arrives from the same loopback source:
+      #
+      #   python scripts/udp-relay.py --listen-port 5005 --forward-port 5006
+      #
+      # See docs/TROUBLESHOOTING.md §9 for details.
+      - "5005:5005/udp"
+    environment:
+      - RUST_LOG=info
+      # CSI_SOURCE controls the data source for the sensing server.
+      # Options: auto (default) — probe for ESP32 UDP then host WiFi; **fail
+      #                           hard with exit 78 if neither is detected**.
+      #                           Synthetic data is no longer a silent fallback
+      #                           (issue #937 fix) — operators must opt in.
+      #          esp32          — receive real CSI frames from an ESP32 on UDP port 5005
+      #          wifi           — use host Wi-Fi RSSI/scan data (Windows netsh)
+      #          simulated      — explicitly generate synthetic CSI for demo mode
+      - CSI_SOURCE=${CSI_SOURCE:-auto}
+      # MODELS_DIR controls where the server scans for .rvf model files.
+      # Mount a host directory and set this to make models visible:
+      #   volumes: ["/path/to/models:/app/models"]
+      #   MODELS_DIR=/app/models
+      - MODELS_DIR=${MODELS_DIR:-data/models}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    # No explicit command needed — docker-entrypoint.sh uses CSI_SOURCE.
+    # Override with: command: ["--source", "esp32", "--tick-ms", "500"]
+
+  python-sensing:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.python
+    image: ruvnet/wifi-densepose:python
+    ports:
+      - "127.0.0.1:8765:8765"   # WebSocket
+      - "127.0.0.1:8080:8080"   # UI
+    environment:
+      - PYTHONUNBUFFERED=1
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8765), 2).close()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3

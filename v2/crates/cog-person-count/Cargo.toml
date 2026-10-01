@@ -1,0 +1,47 @@
+[package]
+name = "cog-person-count"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cognitum Cog: WiFi-CSI presence detector + (data-gated) person count (ADR-103). Candle-based head trained on classes 0/1 (presence); the 8-class count head ships but counts above the trained range are flagged low_confidence. Stoer-Wagner multi-node fusion."
+
+[[bin]]
+name = "cog-person-count"
+path = "src/main.rs"
+
+[lib]
+name = "cog_person_count"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+sha2 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+# Same Candle stack the pose cog uses — CPU by default, `cuda` feature
+# opt-in for hosts with a CUDA GPU.
+candle-core = { version = "0.9", default-features = false }
+candle-nn = { version = "0.9", default-features = false }
+safetensors = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+approx = "0.5"
+# ADR-163: steady-state infer latency bench (real count_v1 weights, Device::Cpu).
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "infer_bench"
+harness = false
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+hailo = []

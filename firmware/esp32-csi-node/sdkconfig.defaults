@@ -1,0 +1,68 @@
+# ESP32-S3 CSI Node — Default SDK Configuration
+# This file is applied automatically by idf.py when no sdkconfig exists.
+
+# Target: ESP32-S3
+CONFIG_IDF_TARGET="esp32s3"
+
+# Use custom partition table (8MB flash with OTA — ADR-045)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_display.csv"
+
+# Flash configuration: 8MB (Quad SPI)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# Compiler optimization: optimize for size to reduce binary
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Enable CSI (Channel State Information) in WiFi driver
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+
+# NVS encryption disabled by default (requires eFuse provisioning).
+# Enable only after burning HMAC key to eFuse block.
+# CONFIG_NVS_ENCRYPTION is not set
+
+# Disable unused features to reduce binary size
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# LWIP: enable extended socket options for UDP multicast
+CONFIG_LWIP_SO_RCVBUF=y
+
+# Issue (sibling of #946/#949/#864 cluster): UDP `sendto` returned ENOMEM
+# in a tight loop on both ESP32-S3 (COM8) and ESP32-C6 (COM9) at the v0.7.0
+# CSI packet rate (CSI cb + status + sync + feature_state all sharing the
+# LWIP/WiFi pools). stream_sender.c has a cooldown path so the device
+# doesn't crash, but ~90 % of CSI frames were dropped before reaching the
+# host — boot trace showed `sendto ENOMEM — backing off 100 ms` repeating
+# every capture cycle. Stock IDF v5.4 defaults: UDP recv mbox=6, TCPIP
+# mbox=32, WiFi dynamic TX buffers=32 — too small once CSI promiscuous
+# mode is active. These bumps roughly quadruple the relevant pools at
+# ~3 KB extra heap cost, measured live on both targets Jun 8 2026.
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=32
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
+# NOTE: Empirical 25 s measurements on the S3 at COM8 showed these bumps
+# eliminate the csi_collector.sendto failure path (`fail #1..5` →
+# `fail #0`) — real improvement — but do NOT eliminate the broader
+# `feature_state emit` ENOMEM at ~10/s. That residual is the WiFi
+# radio's TX airtime saturating under CSI promiscuous RX, and bigger
+# buffers cap out at the 100 ms backoff window regardless of size
+# (verified at WIFI_DYNAMIC_TX=128 + PBUF_POOL=32 — identical count).
+# The proper fix is rate-limiting adaptive_controller.c's emit cadence
+# from ~50 ms to the intended 1 Hz, which is a code refactor tracked
+# in a separate follow-up issue.
+
+# FreeRTOS: increase task stack for CSI processing
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Extra WiFi IRAM placement (defense-in-depth for RuView#396 SPI cache race)
+CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=y
+
+# ADR-081: adaptive_controller runs emit_feature_state + stream_sender
+# network I/O inside Timer Svc callbacks, exceeding the 2 KiB default.
+# Without this, the device bootloops with
+# "***ERROR*** A stack overflow in task Tmr Svc has been detected."
+# Was present in sdkconfig.defaults.template but missing here — fixed
+# in the v0.6.5-esp32 release.
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=8192

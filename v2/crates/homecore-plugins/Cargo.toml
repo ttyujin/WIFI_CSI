@@ -1,0 +1,68 @@
+# HOMECORE-PLUGINS — WASM integration plugin system.
+# Implements ADR-128 (HOMECORE-PLUGINS), P1 scaffold:
+#   - PluginManifest (serde-deserialised, superset of HA manifest.json)
+#   - HomeCorePlugin async trait + PluginId + PluginError
+#   - PluginRuntime trait + InProcessRuntime (native Rust, first-party plugins)
+#   - PluginRegistry (load / unload / list)
+#
+# The `wasmtime` feature gates the audited server-side WebAssembly sandbox.
+
+[package]
+name = "homecore-plugins"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "WASM integration plugin runtime for HOMECORE (ADR-128 P1 scaffold)"
+repository = "https://github.com/ruvnet/RuView"
+
+[lib]
+name = "homecore_plugins"
+path = "src/lib.rs"
+
+[features]
+default = []
+# P2: real Wasmtime JIT sandbox (Cranelift; ~15 MB binary delta on Pi 5).
+# Do not enable in production until the host ABI is frozen (ADR-128 §8 risk).
+wasmtime = ["dep:wasmtime"]
+
+[dependencies]
+# HOMECORE state machine — local path (ADR-127).
+homecore = { path = "../homecore", version = "0.1.0-alpha.0" }
+
+# Async runtime — same version as workspace.
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+
+# Async trait support for HomeCorePlugin.
+async-trait = "0.1"
+
+# Error handling.
+thiserror = "1"
+
+# Serialisation (manifest JSON + ABI call payloads).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# UUIDs for config entry IDs in host_abi.rs.
+uuid = { version = "1", features = ["v4"] }
+
+# ── ADR-162 P4: plugin signature + integrity verification ──────────────────
+# Reuses the same in-repo crypto stack as cog-ha-matter (witness_signing.rs):
+# Ed25519 over a SHA-256 module digest. All four are already in the workspace
+# Cargo.lock (cog-ha-matter / bfld pull them in) — no new external dep tree.
+ed25519-dalek = "2.1"
+sha2 = { workspace = true }
+hex = "0.4"
+base64 = "0.22"
+
+# Optional Wasmtime runtime (P2, default-off — 30 MB dep).
+# Upgraded from 25.0.3 to remediate the Cranelift/Winch sandbox advisories;
+# 40.0.4 was subsequently replaced because of RUSTSEC-2026-0114.
+# Patched 36.x retains HOMECORE's Rust 1.89 MSRV.
+wasmtime = { version = "36.0.8", optional = true }
+
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "test-util"] }
+# WAT text-format compiler for inline WASM unit tests (wasmtime feature only).
+wat = { version = "1", optional = false }

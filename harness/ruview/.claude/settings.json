@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ruview__*"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  },
+  "mcpServers": {
+    "ruview": {
+      "command": "npx",
+      "args": ["-y", "@ruvnet/ruview@0.3.1", "mcp", "start"]
+    }
+  }
+}

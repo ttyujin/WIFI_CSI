@@ -1,0 +1,266 @@
+//! Bridge between sensing-server frame data and signal crate FieldModel
+//! for eigenvalue-based person counting.
+//!
+//! The FieldModel decomposes CSI observations into environmental drift and
+//! body perturbation via SVD eigenmodes. When calibrated, perturbation energy
+//! provides a physics-grounded occupancy estimate that supplements the
+//! score-based heuristic in `score_to_person_count`.
+
+use std::collections::VecDeque;
+use std::sync::LazyLock;
+use wifi_densepose_signal::hardware_norm::HardwareNormalizer;
+use wifi_densepose_signal::ruvsense::field_model::{
+    CalibrationStatus, FieldModel, FieldModelConfig,
+};
+
+use super::score_to_person_count;
+
+/// Length-only canonicalizer for calibration frames (issue #1170 pattern,
+/// shared with `multistatic_bridge`). Raw ESP32 amplitudes arrive at the
+/// hardware's native width (HT20 ≈ 64, HT40 ≈ 128/192); the FieldModel is
+/// configured for the canonical 56-tone grid, and `feed_calibration` rejects
+/// any other width with `DimensionMismatch`. Resampling here (default 56)
+/// lets real HT40 nodes actually calibrate instead of silently feeding nothing.
+static CALIB_NORMALIZER: LazyLock<HardwareNormalizer> = LazyLock::new(HardwareNormalizer::new);
+
+/// Number of recent frames to feed into perturbation extraction.
+const OCCUPANCY_WINDOW: usize = 50;
+
+/// Perturbation energy threshold for detecting a second person.
+const ENERGY_THRESH_2: f64 = 12.0;
+/// Perturbation energy threshold for detecting a third person.
+const ENERGY_THRESH_3: f64 = 25.0;
+
+/// Maximum occupancy a single ESP32 link can plausibly resolve (#894).
+/// The score heuristic (`score_to_person_count`) and the perturbation-energy
+/// fallback below both cap here; the eigenvalue path is bounded to match,
+/// rather than leaking its internal `min(10)` ceiling on noisy / under-
+/// calibrated CSI (the "10 persons reported when 1 present" symptom).
+/// Resolving more than this from one link's subcarrier covariance is not
+/// reliable — genuine higher counts come from the multistatic fusion path.
+const MAX_SINGLE_LINK_OCCUPANCY: usize = 3;
+
+/// Create a FieldModelConfig for single-link mode (one ESP32 node = one link).
+/// This avoids the DimensionMismatch error when feeding single-frame observations.
+pub fn single_link_config() -> FieldModelConfig {
+    FieldModelConfig {
+        n_links: 1,
+        ..FieldModelConfig::default()
+    }
+}
+
+/// Estimate occupancy using the FieldModel when calibrated, falling back
+/// to the score-based heuristic otherwise.
+///
+/// Prefers `estimate_occupancy()` (eigenvalue-based) when the model is
+/// calibrated and enough frames are available. Falls back to perturbation
+/// energy thresholds, then to the score heuristic.
+pub fn occupancy_or_fallback(
+    field: &FieldModel,
+    frame_history: &VecDeque<Vec<f64>>,
+    smoothed_score: f64,
+    prev_count: usize,
+) -> usize {
+    match field.status() {
+        CalibrationStatus::Fresh | CalibrationStatus::Stale => {
+            let frames: Vec<Vec<f64>> = frame_history
+                .iter()
+                .rev()
+                .take(OCCUPANCY_WINDOW)
+                .cloned()
+                .collect();
+
+            if frames.is_empty() {
+                return score_to_person_count(smoothed_score, prev_count);
+            }
+
+            // Try eigenvalue-based occupancy first (best accuracy). Bound it to
+            // the same single-link maximum the sibling estimators use — the
+            // perturbation fallback below and score_to_person_count both cap at
+            // MAX_SINGLE_LINK_OCCUPANCY. Without this, estimate_occupancy's
+            // internal min(10) ceiling leaks up to 10 persons on noisy / under-
+            // calibrated CSI (#894), while every other path on the same data
+            // would report ≤3.
+            if let Ok(count) = field.estimate_occupancy(&frames) {
+                return count.min(MAX_SINGLE_LINK_OCCUPANCY);
+            } // else fall through to perturbation energy
+
+            // Fallback: perturbation energy thresholds.
+            // FieldModel expects [n_links][n_subcarriers] — we use n_links=1.
+            let observation = vec![frames[0].clone()];
+            match field.extract_perturbation(&observation) {
+                Ok(perturbation) => {
+                    if perturbation.total_energy > ENERGY_THRESH_3 {
+                        3
+                    } else if perturbation.total_energy > ENERGY_THRESH_2 {
+                        2
+                    } else if perturbation.total_energy > 1.0 {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                Err(_) => score_to_person_count(smoothed_score, prev_count),
+            }
+        }
+        _ => score_to_person_count(smoothed_score, prev_count),
+    }
+}
+
+/// Feed the latest frame to the FieldModel during calibration collection.
+///
+/// Acts while the model is `Uncalibrated` or `Collecting`. The first fed frame
+/// flips a freshly-started (`Uncalibrated`) model to `Collecting` inside
+/// `feed_calibration`; without accepting the `Uncalibrated` state here the two
+/// gates deadlock and the frame count never leaves 0 (calibration/start yields
+/// an `Uncalibrated` model that nothing would ever advance). Wraps the latest
+/// frame as a single-link observation (n_links=1) and feeds it.
+pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<Vec<f64>>) {
+    if !matches!(
+        field.status(),
+        CalibrationStatus::Uncalibrated | CalibrationStatus::Collecting
+    ) {
+        return;
+    }
+    if let Some(latest) = frame_history.back() {
+        // Resample the raw amplitude vector onto the FieldModel's canonical
+        // 56-tone grid before feeding. Real HT40 nodes stream 128-wide frames;
+        // feeding those raw made every `feed_calibration` fail DimensionMismatch
+        // (swallowed at debug level), pinning frame_count at 0 even after the
+        // status-gate deadlock was fixed. Single-link observation: [1][56].
+        let canonical = CALIB_NORMALIZER.resample_to_canonical(latest);
+        let observations = vec![canonical];
+        if let Err(e) = field.feed_calibration(&observations) {
+            tracing::debug!("FieldModel calibration feed: {e}");
+        }
+    }
+}
+
+/// Parse node positions from a semicolon-delimited string.
+///
+/// Format: `"x,y,z;x,y,z;..."` where each coordinate is an `f32`.
+/// Malformed entries are skipped with a warning log.
+pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+    input
+        .split(';')
+        .enumerate()
+        .filter_map(|(idx, triplet)| {
+            let parts: Vec<&str> = triplet.split(',').collect();
+            if parts.len() != 3 {
+                tracing::warn!(
+                    "Skipping malformed node position entry {idx}: '{triplet}' (expected x,y,z)"
+                );
+                return None;
+            }
+            match (
+                parts[0].parse::<f32>(),
+                parts[1].parse::<f32>(),
+                parts[2].parse::<f32>(),
+            ) {
+                (Ok(x), Ok(y), Ok(z)) => Some([x, y, z]),
+                _ => {
+                    tracing::warn!("Skipping unparseable node position entry {idx}: '{triplet}'");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_node_positions() {
+        let positions = parse_node_positions("0,0,1.5;3,0,1.5;1.5,3,1.5");
+        assert_eq!(positions.len(), 3);
+        assert_eq!(positions[0], [0.0, 0.0, 1.5]);
+        assert_eq!(positions[1], [3.0, 0.0, 1.5]);
+        assert_eq!(positions[2], [1.5, 3.0, 1.5]);
+    }
+
+    #[test]
+    fn test_parse_node_positions_empty() {
+        let positions = parse_node_positions("");
+        assert!(positions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_node_positions_invalid() {
+        let positions = parse_node_positions("abc;1,2,3");
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0], [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_parse_node_positions_partial_triplet() {
+        let positions = parse_node_positions("1,2;3,4,5");
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0], [3.0, 4.0, 5.0]);
+    }
+
+    /// Regression: a freshly-started (`Uncalibrated`) field model must begin
+    /// collecting once frames arrive. Before the fix, `maybe_feed_calibration`
+    /// only fed while already `Collecting`, but only `feed_calibration` sets
+    /// `Collecting` — so the first frame was never fed and the count stayed 0.
+    #[test]
+    fn maybe_feed_calibration_advances_uncalibrated_to_collecting() {
+        let mut field = FieldModel::new(single_link_config()).expect("field model");
+        assert_eq!(field.status(), CalibrationStatus::Uncalibrated);
+        assert_eq!(field.calibration_frame_count(), 0);
+
+        // n_subcarriers defaults to 56; one single-link frame of that width.
+        let frame = vec![0.5_f64; 56];
+        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
+        history.push_back(frame);
+
+        maybe_feed_calibration(&mut field, &history);
+
+        assert_eq!(
+            field.status(),
+            CalibrationStatus::Collecting,
+            "first frame must flip Uncalibrated -> Collecting"
+        );
+        assert_eq!(
+            field.calibration_frame_count(),
+            1,
+            "frame count must advance past 0"
+        );
+
+        // Subsequent frames keep accumulating while Collecting.
+        maybe_feed_calibration(&mut field, &history);
+        assert_eq!(field.calibration_frame_count(), 2);
+    }
+
+    /// Regression (#1170 pattern): a real HT40 node streams 128-wide amplitude
+    /// frames, but the FieldModel is a 56-tone grid. Before canonicalization,
+    /// `feed_calibration` rejected every frame with DimensionMismatch (swallowed
+    /// at debug), so frame_count stayed 0 even with the deadlock fixed. The feed
+    /// must resample 128 → 56 and actually accumulate.
+    #[test]
+    fn maybe_feed_calibration_resamples_wide_frames_and_accumulates() {
+        let mut field = FieldModel::new(single_link_config()).expect("field model");
+
+        // 128-wide frame (HT40), NOT the model's 56 — would DimensionMismatch raw.
+        let wide = vec![0.5_f64; 128];
+        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
+        history.push_back(wide);
+
+        maybe_feed_calibration(&mut field, &history);
+
+        assert_eq!(
+            field.status(),
+            CalibrationStatus::Collecting,
+            "128-wide frame must resample to 56 and be accepted"
+        );
+        assert_eq!(
+            field.calibration_frame_count(),
+            1,
+            "wide frame must accumulate, not be silently dropped"
+        );
+    }
+}

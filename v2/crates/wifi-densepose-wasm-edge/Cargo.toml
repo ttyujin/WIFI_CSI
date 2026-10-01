@@ -1,0 +1,74 @@
+[package]
+name = "wifi-densepose-wasm-edge"
+version = "0.3.0"
+edition = "2021"
+authors = ["rUv <ruv@ruv.net>", "WiFi-DensePose Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ruvnet/wifi-densepose"
+description = "WASM-compilable sensing algorithms for ESP32 edge deployment (ADR-040)"
+keywords = ["wifi", "wasm", "sensing", "esp32", "dsp"]
+categories = ["embedded", "wasm", "science"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+# The lib's libtest harness does not understand criterion CLI flags
+# (`--warm-up-time` etc.), so exclude it from `cargo bench` — only the criterion
+# bench target below should receive bench args (ADR-163).
+bench = false
+
+# ADR-163: host-measured process_frame latency benches (closes the ADR-160
+# "criterion benches for process_frame budget claims" deferred item — HOST only;
+# the ESP32-S3 WASM3 budget remains unmeasured, see the bench header).
+# `std` is required (criterion is a host crate); the crate is workspace-EXCLUDED
+# so run from the crate dir: `cargo bench --features std`.
+[[bench]]
+name = "process_frame_bench"
+harness = false
+required-features = ["std"]
+
+[dependencies]
+# no_std math
+libm = "0.2"
+# SHA-256 for RVF build hash (optional, used by builder)
+sha2 = { version = "0.10", optional = true, default-features = false }
+
+[dev-dependencies]
+# Host-only latency regression benches (ADR-163). Pinned to match the rest of
+# the workspace's bench crates.
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[features]
+default = ["default-pipeline"]
+# Enable std for testing on host + RVF builder
+std = ["sha2/std"]
+# Experimental medical skills (med_seizure_detect, med_cardiac_arrhythmia,
+# med_respiratory_distress, med_sleep_apnea, med_gait_analysis).
+#
+# ⚠️ NON-DEFAULT BY DESIGN. These modules run real DSP but are NOT validated
+# against clinical data and are NOT medical devices (ADR-160 §A1). They are
+# gated behind this feature so they cannot be silently built into a shipping
+# artifact. Build/test with:
+#   cargo test -p wifi-densepose-wasm-edge --features std,medical-experimental
+medical-experimental = []
+# Include the default combined pipeline (gesture+coherence+adversarial) entry points.
+# Disable this when building standalone module binaries (ghost_hunter, etc.)
+default-pipeline = []
+# Build the standalone-bin Ghost Hunter target. Required because that binary
+# defines its own on_init / on_frame / on_timer entry points which would
+# collide with the lib's `default-pipeline` exports. Build with:
+#   cargo build -p wifi-densepose-wasm-edge --bin ghost_hunter \
+#     --target wasm32-unknown-unknown --release \
+#     --no-default-features --features standalone-bin
+standalone-bin = []
+
+[[bin]]
+name = "ghost_hunter"
+path = "src/bin/ghost_hunter.rs"
+required-features = ["standalone-bin"]
+
+[profile.release]
+opt-level = "s"        # Optimize for size
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

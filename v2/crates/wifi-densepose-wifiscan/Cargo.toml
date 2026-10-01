@@ -1,0 +1,60 @@
+[package]
+name = "wifi-densepose-wifiscan"
+version = "0.3.2"
+edition.workspace = true
+description = "Multi-BSSID WiFi scanning domain layer for enhanced Windows WiFi DensePose sensing (ADR-022)"
+license.workspace = true
+authors = ["rUv <ruv@ruv.net>", "WiFi-DensePose Contributors"]
+repository.workspace = true
+documentation = "https://docs.rs/wifi-densepose-wifiscan"
+keywords = ["wifi", "bssid", "scanning", "windows", "sensing"]
+categories = ["science", "computer-vision"]
+readme = "README.md"
+
+[dependencies]
+# Logging
+tracing.workspace = true
+
+# Serialization (optional, for domain types)
+serde = { workspace = true, optional = true }
+
+# Async runtime (optional, for Tier 2 async scanning)
+tokio = { workspace = true, optional = true }
+
+# Native Windows WLAN API (`wlanapi.dll`) FFI for the Tier 2 native scan
+# path. Only linked on Windows targets; on every other platform the
+# native path returns a typed `Unsupported` error and this dependency is
+# not compiled at all. `windows-sys` is already in the workspace lock
+# tree (transitive), so this adds no new external crate.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_WiFi",
+] }
+
+[features]
+default = ["serde", "pipeline"]
+serde = ["dep:serde"]
+pipeline = []
+## Tier 2: enables async scan_async() method on WlanApiScanner via tokio
+wlanapi = ["dep:tokio"]
+
+[lints.rust]
+# `deny` (not `forbid`) so the single, audited `wlan_ffi` module can opt
+# back in with `#[allow(unsafe_code)]` for the `wlanapi.dll` FFI calls.
+# Every other module in the crate remains unsafe-free (enforced by deny).
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+doc_markdown = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+many_single_char_names = "allow"
+uninlined_format_args = "allow"
+assigning_clones = "allow"

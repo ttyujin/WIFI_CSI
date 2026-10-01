@@ -1,0 +1,48 @@
+# homecore-hap — Apple Home HomeKit Accessory Protocol bridge (ADR-125 P1 scaffold)
+#
+# P1 ships the trait surface, accessory/characteristic types, entity→HAP mapping,
+# bridge API, and an mDNS-advertise stub. The actual HAP-1.1 server and real
+# mDNS integration are feature-gated to P2 via the `hap-server` feature flag.
+
+[package]
+name = "homecore-hap"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "Fail-closed HomeKit Accessory Protocol network foundation for HOMECORE"
+repository = "https://github.com/ruvnet/wifi-densepose"
+
+[lib]
+name = "homecore_hap"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enables the bounded TCP/HTTP listener and real `_hap._tcp` mDNS advertiser.
+hap-server = ["dep:httparse", "dep:mdns-sd"]
+
+[dependencies]
+homecore = { path = "../homecore" }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+ed25519-dalek = "2.1"
+tempfile = "3"
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+hkdf = "0.12"
+sha2 = "0.10"
+sha2_11 = { package = "sha2", version = "0.11" }
+srp = "=0.7.0-rc.3"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = { version = "1", features = ["derive"] }
+httparse = { version = "1", optional = true }
+mdns-sd = { version = "0.11", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
